@@ -48,7 +48,6 @@ build-*/
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
-Makefile
 install_manifest.txt
 compile_commands.json
 
@@ -63,6 +62,12 @@ vcpkg_installed/
 
 # debug information files
 *.dwo
+
+# OS build output
+*.elf
+*.bin
+*.img
+kernel.padded.bin
 
 # test output & cache
 Testing/
