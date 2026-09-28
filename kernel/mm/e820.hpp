@@ -41,7 +41,7 @@ uint32_t e820_entry_count();
 // e820_entry_count() trước và tự đảm bảo index hợp lệ.
 const E820Entry* e820_entry(uint32_t index);
 
-// In toàn bộ bản đồ RAM ra VGA text buffer — bước xác minh bằng mắt trên
-// QEMU trước khi Physical Frame Allocator dùng dữ liệu này làm input thật
+// In toàn bộ bản đồ RAM qua kprintf (serial + VGA) — bước xác minh bằng mắt
+// trên QEMU trước khi Physical Frame Allocator dùng dữ liệu này làm input thật
 // (đúng nguyên tắc "mỗi bước phải thấy kết quả trên QEMU" ở CLAUDE.md).
 void e820_dump();

@@ -13,9 +13,9 @@ struct Tss {
     uint64_t rsp1;
     uint64_t rsp2;
     uint64_t reserved1;
-    uint64_t ist1;   // <- Double Fault (vector 8) sẽ dùng đúng slot này
-    uint64_t ist2;
-    uint64_t ist3;
+    uint64_t ist1;   // Double Fault (vector 8)
+    uint64_t ist2;   // NMI (vector 2)
+    uint64_t ist3;   // Machine Check (vector 18)
     uint64_t ist4;
     uint64_t ist5;
     uint64_t ist6;
@@ -33,3 +33,7 @@ void tss_install_descriptor(TssDescriptor* out_descriptor);
 // Nạp Task Register bằng lệnh `ltr` — phải gọi SAU khi GDT chứa TSS
 // descriptor đã active (đã lgdt xong).
 void tss_load();
+
+// Đặt kernel stack mà CPU sẽ tự nạp khi có ngắt/syscall từ ring 3.
+// Chưa dùng khi còn chạy 100% ring 0; scheduler sẽ gọi mỗi lần đổi thread.
+void tss_set_rsp0(uint64_t rsp0);

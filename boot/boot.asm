@@ -130,6 +130,16 @@ stage2_start:
     call print16b
     call detect_memory_e820
 
+    ; ---- TẮT NGẮT trước khi rời Real Mode ----
+    ; Stage1 đã `sti` (bắt buộc, vì BIOS INT 13h/15h cần ngắt bật). Nhưng từ
+    ; giây phút `mov cr0` bên dưới, IDTR vẫn đang trỏ tới IVT của Real Mode
+    ; trong khi CPU đã diễn giải nó theo định dạng gate của Protected Mode —
+    ; một tick timer rơi vào khoảng này sẽ đọc phải "gate" rác → #GP → #DF →
+    ; triple fault, xảy ra ngẫu nhiên nên cực khó tái hiện.
+    ; Ngắt chỉ được bật lại SAU KHI kernel đã có IDT thật VÀ đã remap PIC
+    ; (PIC mặc định ánh xạ IRQ0-7 đè lên vector 8-15 của CPU exception).
+    cli
+
     ; ---- Bật đường A20 (fast A20 gate qua port 0x92) ----
     ; Nếu không bật A20, CPU sẽ "wrap around" bộ nhớ ở 1MB như thời 8086,
     ; khiến việc truy cập bộ nhớ trên 1MB (bắt buộc cho protected mode) bị lỗi.

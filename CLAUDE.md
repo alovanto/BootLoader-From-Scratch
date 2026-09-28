@@ -26,22 +26,31 @@
   rõ ràng, có comment giải thích "vì sao", quan trọng hơn code ngắn/nhanh.
 - **C++ + Assembly, không Rust** (quyết định đã chốt, xem mục 9 để biết lý do).
 
-## 2. Trạng thái hiện tại (cập nhật lần cuối: Physical Frame Allocator xong)
+> **Kiến trúc đầy đủ & lộ trình chi tiết:** xem [`docs/architecture.md`](docs/architecture.md)
+> — file đó chứa bức tranh toàn cảnh (các tầng, luồng tương tác giữa chúng),
+> bản thiết kế chi tiết từng subsystem kèm code, và lộ trình M0→M9 có tiêu chí
+> kiểm chứng. File CLAUDE.md này giữ vai trò: trạng thái hiện tại + quy ước +
+> bảng ràng buộc.
+
+## 2. Trạng thái hiện tại (cập nhật lần cuối: M0a — gia cố nền tảng xong)
 
 | Thành phần | Trạng thái | Ghi chú |
 |---|---|---|
 | Cấu trúc thư mục (`boot/`, `kernel/arch/x86_64/`, `kernel/mm/`...) | ✅ Xong | Đã tách khỏi layout phẳng ban đầu, khớp đúng mục 4 bên dưới; top-level `Makefile` đã hoàn thiện (assemble boot, gọi `make -C kernel`, ghép `os.img`, target `run`/`debug`) |
 | Bootloader (`boot/boot.asm`) | ✅ Xong | Real → Protected → Long Mode, GDT, A20, page table 1GB identity-map |
 | Nạp + bàn giao kernel | ✅ Xong | Bootloader tự load `kernel.bin` từ đĩa, copy lên 1MB, `jmp` vào `_start` |
-| IDT tối thiểu + ISR | ✅ Xong | Bắt được Page Fault/GPF/Double Fault, in chẩn đoán thay vì triple fault |
-| GDT riêng của kernel + TSS/IST | ✅ Xong | Double Fault chạy trên stack riêng (IST1, 8KB), an toàn dù stack chính hỏng |
+| IDT đủ 256 vector + ISR | ✅ Xong | Bắt mọi exception, in chẩn đoán đầy đủ (gồm RSP/SS) rồi `panic()`; vector 32-255 báo "ngắt không mong đợi" thay vì gây #GP câm |
+| GDT riêng của kernel + TSS/IST | ✅ Xong | Layout đã sẵn sàng cho SYSCALL/SYSRET (user code32 `0x18`, user data `0x20`, user code64 `0x28`, TSS `0x30`). Stack IST riêng cho #DF (IST1), NMI (IST2), #MC (IST3), mỗi cái 8KB |
+| Serial COM1 + `kprintf` + `panic` | ✅ Xong | `drivers/serial.*`, `lib/kprintf.*`, `lib/panic.*` — log qua `qemu -serial stdio`, panic in đủ thanh ghi + backtrace theo chuỗi RBP |
+| PIC remap + mask toàn bộ | ✅ Xong | `arch/x86_64/pic.*` — IRQ0-15 → vector 32-47. **Đã sửa lỗi nghiêm trọng:** trước đây Stage1 `sti` rồi không ai `cli`, nên IRQ0 rơi vào vector 8 và bị báo nhầm thành Double Fault |
+| Per-CPU qua GS (`struct Cpu`) | ✅ Xong | `arch/x86_64/cpu.*` — tương đương KPCR của Windows; offset đã cố định để syscall entry (asm) dùng sau |
+| Runtime C++ + `memcpy`/`memset` | ✅ Xong | `lib/cxx_runtime.cpp` (`.init_array`, `__cxa_atexit`), `lib/string.asm` |
 | E820 memory map | ✅ Xong | `boot.asm` dò qua BIOS INT 15h/E820 ở Real Mode, ghi vào vật lý `0x20000`; `kernel/mm/e820.*` đọc lại + in ra VGA để verify. Bootloader vẫn identity-map cứng 1GB (chưa dùng map này để giới hạn phạm vi paging — đó là việc của VMM) |
 | `.bss` được xoá chủ động | ✅ Xong | `kernel_entry.asm` zero `[__bss_start, __bss_end)` (symbol từ `linker.ld`) trước khi gọi `kernel_main` — bắt buộc từ khi PMM thêm bitmap 128KB vào `.bss`, không còn dựa vào zero-pad tình cờ của Makefile |
 | Physical Frame Allocator | ✅ Xong | `kernel/mm/pmm.*` — bitmap 128KB quản lý 4GB, khoá đúng vùng 1MB thấp + vùng kernel thật; demo alloc/free trong `kernel_main.cpp` chứng minh frame free() được tái sử dụng đúng |
-| PIC remap + PIT timer | ❌ Chưa làm | **Bẫy quan trọng khi cần tới**: PIC mặc định đè lên vector 8-15 (trùng CPU exception). Chỉ bắt buộc trước khi gọi `sti` (từ bước Process/Scheduler trở đi) |
-| Virtual Memory Manager (thật) | ⚠️ Chỉ có bản thô | **Bước tiếp theo** — bootloader chỉ identity-map 1GB, PMM có thể đã cấp frame nằm ngoài vùng đó (xem mục 6) |
+| PIT timer + khung IRQ | ❌ Chưa làm | PIC đã remap xong (dòng trên) nên phần còn lại chỉ là đăng ký handler + `sti`. Chưa `sti` ở đâu cả: ngắt vẫn TẮT cho tới khi có scheduler |
+| Virtual Memory Manager (thật) | ⚠️ Chỉ có bản thô | **Bước tiếp theo** — bootloader chỉ identity-map 1GB, PMM có thể đã cấp frame nằm ngoài vùng đó (xem mục 6). Thiết kế chi tiết: `docs/architecture.md` mục 5.5 |
 | Kernel Heap Allocator | ❌ Chưa làm | Cần VMM thật trước |
-| Serial (COM1) debug output | ❌ Chưa làm | Đang dùng VGA text buffer thủ công, nên chuyển sang serial |
 | Process/Thread Manager + Scheduler | ❌ Chưa làm | |
 | Driver (keyboard, ATA disk) | ❌ Chưa làm | |
 | VFS + Filesystem | ❌ Chưa làm | Đã bàn kiến trúc (page cache, inode/dentry) nhưng chưa code |
@@ -51,9 +60,16 @@
 
 - **Ngôn ngữ:** C++17 (freestanding) cho logic kernel, x86-64 Assembly (NASM
   syntax) cho phần đụng trực tiếp CPU (bootloader, ISR entry stub, context switch).
-- **Compiler:** `g++`/`clang++` với cờ freestanding bắt buộc:
-  `-ffreestanding -fno-exceptions -fno-rtti -mno-red-zone -mcmodel=kernel
-  -fno-pic -fno-pie`. Không dùng cross-compiler riêng (`x86_64-elf-gcc`) —
+- **Compiler:** `g++`/`clang++` với bộ cờ freestanding đầy đủ — xem
+  `kernel/Makefile`, mỗi cờ đều có comment giải thích tại chỗ. Ngoài nhóm hiển
+  nhiên (`-ffreestanding -fno-exceptions -fno-rtti -mno-red-zone
+  -mcmodel=kernel -fno-pic -fno-pie`) còn 5 cờ **bắt buộc** hay bị quên:
+  `-fno-stack-protector` (distro bật mặc định → cần `__stack_chk_fail` và
+  canary ở `%fs:0x28`), `-fno-threadsafe-statics`, `-mgeneral-regs-only`
+  (cấm SSE — ISR/context switch không lưu thanh ghi XMM, chỉ cần g++ dùng XMM
+  copy một struct là hỏng dữ liệu âm thầm), `-fno-omit-frame-pointer` (cho
+  backtrace trong `panic`), `-fno-asynchronous-unwind-tables`.
+  Không dùng cross-compiler riêng (`x86_64-elf-gcc`) —
   dùng thẳng compiler host trên máy x86_64 Linux vì cùng ISA, chỉ cần đúng cờ
   freestanding là đủ, không cần build toolchain riêng.
 - **Assembler:** NASM (`nasm -f bin` cho bootloader flat binary, `nasm -f elf64`
@@ -184,14 +200,16 @@ loại bỏ nguy cơ triple fault khi double fault do stack chính đã hỏng.
 ### 5.4 IDT / ISR / Exception handling (`kernel/idt.*`, `kernel/isr_stubs.asm`, `kernel/interrupt_handlers.cpp`)
 
 - `idt.hpp`: định nghĩa `IdtEntry` (16-byte gate, layout khớp Intel/AMD
-  manual), `Registers` (bản chụp thanh ghi khi exception xảy ra).
-- **`Registers` KHÔNG có trường `rsp`/`ss`** — vì kernel hiện tại chạy 100%
-  ring 0, CPU chỉ push `RIP, CS, RFLAGS` (+ error code nếu có) khi exception
-  xảy ra, không push RSP/SS (chỉ push khi đổi mức đặc quyền). **Khi thêm
-  user-mode (ring 3), PHẢI thêm lại 2 trường này** và sửa `isr_common` trong
-  `isr_stubs.asm` tương ứng (đọc kỹ comment trong `idt.hpp` trước khi sửa).
-- `isr_stubs.asm`: 32 stub cho vector 0-31, macro `ISR_ERR`/`ISR_NOERR` phân
-  biệt vector nào CPU tự push error code thật (8, 10, 11, 12, 13, 14, 17) và
+  manual), `InterruptFrame` (bản chụp thanh ghi khi exception xảy ra).
+- **`InterruptFrame` CÓ đủ `rsp`/`ss`.** Quy tắc "CPU chỉ push SS:ESP khi đổi
+  mức đặc quyền" là của Protected Mode 32-bit. Ở Long Mode thì CPU **luôn**
+  push đủ 5 giá trị (SS, RSP, RFLAGS, CS, RIP) kể cả ring 0 → ring 0, và còn
+  căn RSP về bội 16 trước khi push (Intel SDM Vol.3 §6.14.2). Struct này từng
+  thiếu 2 trường cuối — code vẫn chạy vì `iretq` tự pop đủ, nhưng chẩn đoán
+  mất RSP, đúng thứ cần nhất để phát hiện tràn stack. Thêm user mode **không**
+  làm đổi layout frame, chỉ cần thêm `swapgs` có điều kiện trong `isr_common`.
+- `isr_stubs.asm`: stub cho đủ 256 vector, macro `ISR_ERR`/`ISR_NOERR` phân
+  biệt vector nào CPU tự push error code thật (8, 10, 11, 12, 13, 14, 17, 21) và
   vector nào cần push giả 0 để đồng nhất layout stack. Tất cả hội tụ vào
   `isr_common` — thứ tự push/pop 15 general-purpose register PHẢI khớp chính
   xác thứ tự field trong `struct Registers`.
@@ -268,7 +286,10 @@ frame đó sẽ Page Fault cho tới khi VMM (bước tiếp theo) tự map on-d
 | `gdt_init()` phải chạy TRƯỚC `idt_init()` | `kernel_main.cpp` | IDT gate tham chiếu GDT chưa active → hành vi không xác định khi exception xảy ra |
 | `KERNEL_SECTORS = 128` | `boot/boot.asm` ↔ top-level `Makefile` | Bootloader copy thiếu kernel, chạy sai không rõ lý do |
 | Kernel base = `0x100000` | `kernel/linker.ld` (`. = 0x100000`) ↔ `boot/boot.asm` (`KERNEL_PHYS_ADDR`) | `jmp` vào sai địa chỉ, thường dẫn tới nhảy vào vùng nhớ rác |
-| `Registers` không có rsp/ss | `idt.hpp` ↔ `isr_stubs.asm` (`isr_common`) ↔ giả định "ring0-only" | Đọc lệch dữ liệu thanh ghi khi có exception, sai âm thầm không crash rõ ràng |
+| Thứ tự field `InterruptFrame` (22 ô, gồm rsp/ss) | `idt.hpp` ↔ `isr_stubs.asm` (`isr_common`) | Đọc lệch dữ liệu thanh ghi khi có exception, sai âm thầm không crash rõ ràng. `static_assert(sizeof(InterruptFrame) == 22*8)` bắt được lệch số lượng, nhưng KHÔNG bắt được lệch thứ tự |
+| Selector user trong GDT phải xếp: code32 `0x18` → data `0x20` → code64 `0x28` | `gdt.hpp` ↔ công thức cố định của lệnh `SYSRET` | SYSRET nạp sai CS/SS khi quay về ring 3 → #GP. Đã có `static_assert` trong `gdt.hpp` |
+| Vector IRQ bắt đầu tại 32 | `pic.hpp` (`PIC_VECTOR_BASE`) ↔ `interrupt_handlers.cpp` | Dùng chung một hằng số nên không lệch được |
+| Offset của `struct Cpu` (self=0, kernel_rsp=8, user_rsp=16) | `cpu.hpp` ↔ assembly syscall entry (sẽ có ở bước user mode) | `static_assert(offsetof(...))` trong `cpu.hpp` bắt được |
 | `kernel_entry.o` phải link đầu tiên | `kernel/Makefile` (`OBJS`) | `_start` không nằm ở byte 0 của kernel.bin → bootloader nhảy vào giữa hàm khác |
 | `E820_MAP_PHYS_ADDR = 0x20000` | `boot/boot.asm` (`E820_SEG:E820_OFF`) ↔ `kernel/mm/e820.hpp` | Kernel đọc nhầm vùng nhớ khác thành bản đồ RAM → PFA cấp phát rác |
 | Layout `E820Entry` = 20 byte (`base:8, length:8, type:4`) | `boot/boot.asm` (`detect_memory_e820`) ↔ `kernel/mm/e820.hpp` (`struct E820Entry`) | Đọc lệch field, `base`/`length` sai giá trị mà không crash rõ ràng |
@@ -278,29 +299,47 @@ frame đó sẽ Page Fault cho tới khi VMM (bước tiếp theo) tự map on-d
 
 ## 7. Nợ kỹ thuật đã biết (technical debt)
 
-1. **PIC chưa remap — BẪY khi bật hardware interrupt.** PIC 8259 mặc định
-   ánh xạ IRQ0-7 vào vector 8-15, TRÙNG với CPU exception vector (vector 8 =
-   Double Fault!). Bắt buộc remap PIC (ICW1-ICW4) sang vector 32-47 TRƯỚC KHI
-   `sti`, nếu không timer tick sẽ trông giống double fault giả. (Chưa cần
-   ngay — chỉ bắt buộc trước khi có subsystem nào gọi `sti`, tức Process/
-   Scheduler; PFA/VMM/Heap không đụng tới ngắt phần cứng.)
-2. **Chưa có serial (COM1) debug output.** Đang in chẩn đoán qua VGA text
-   buffer thủ công (80x25, không copy-paste được). Nên thêm driver serial
-   sớm để log qua `qemu -serial stdio`.
-3. **Chưa có `kprintf`/`panic()` dùng chung.** Mỗi chỗ báo lỗi tự viết lại
-   logic in hex/text (`interrupt_handlers.cpp`, `mm/e820.cpp` đều tự có
-   `to_hex()`/`vga_print` riêng) — nên gom thành một hàm chung trước khi viết
-   thêm nhiều subsystem báo lỗi khác nhau.
+*(Ba khoản nợ đầu tiên — PIC chưa remap, chưa có serial, chưa có
+`kprintf`/`panic` dùng chung — đã trả xong ở M0a. Bài học rút ra ghi ở mục 7.1
+bên dưới vì nó thay đổi cách đọc phần còn lại của file này.)*
+
+1. **BÀI HỌC: đừng tin "ngắt đang tắt" nếu không tự tay tắt nó.** Lỗi tồn tại
+   từ đầu tới M0a: Stage1 gọi `sti` (bắt buộc, vì BIOS `INT 13h` cần ngắt),
+   rồi **không chỗ nào `cli` lại** — kernel chạy suốt với IF=1 trong khi PIC
+   chưa remap. Hệ quả: mỗi tick timer (IRQ0) rơi vào vector 8 và được báo cáo
+   là "Double Fault", dấu hiệu nhận biết là `RIP = 0x8` trong chẩn đoán (thực
+   ra đó là CS, do frame bị lệch một ô vì IRQ không push error code). Ngoài ra
+   còn một cửa sổ triple fault ngẫu nhiên giữa `mov cr0` và `lidt`. Đã sửa:
+   `cli` trong Stage2 trước `lgdt`, `cli`+`cld` đầu `_start`, PIC remap + mask
+   toàn bộ trong `kernel_main`.
+2. **Kernel vẫn bị giới hạn 64KB, và giới hạn đó KHÔNG chỉ là `KERNEL_SECTORS`.**
+   Kernel nạp tạm vào `0x10000`, bảng E820 nằm ở `0x20000` → 128 sector là vừa
+   chạm mép. Tăng con số lên là E820 bị đè. Ngoài ra `INT 13h AH=42h` chỉ đảm
+   bảo đọc tối đa 127 sector mỗi lần gọi. Makefile gốc giờ **dừng build** khi
+   kernel vượt ngưỡng (trước đây `truncate` cắt cụt âm thầm). Cách xử lý triệt
+   để: nạp theo khối qua unreal mode — `docs/architecture.md` mục 5.1.2.
+3. **Kernel vẫn nằm ở nửa thấp không gian địa chỉ (`0x100000`).** Mọi OS 64-bit
+   thật đặt kernel ở nửa cao (`0xFFFFFFFF80000000`) để mỗi process giữ trọn
+   nửa thấp cho riêng mình. Chuyển càng muộn càng đắt vì `mm/` sẽ phải viết
+   lại — nên làm TRƯỚC khi viết VMM thật (`docs/architecture.md` mục 6.2).
 
 ## 8. Lộ trình phát triển tiếp theo (theo đúng thứ tự phụ thuộc)
 
+*(Lộ trình đầy đủ có tiêu chí kiểm chứng từng mốc: `docs/architecture.md` mục 7.
+Tóm tắt thứ tự phụ thuộc:)*
+
 ```
-Virtual Memory Manager thật (mm/vmm) — map()/unmap() linh hoạt, thay identity-map cứng
-   ↓ (LƯU Ý: boot.asm chỉ identity-map 1GB — VMM phải tự map on-demand
-   ↓  bất kỳ frame nào PMM cấp nằm ngoài vùng đó, xem mục 6)
+[M0a ✅] Gia cố nền: cli/PIC/IDT 256/serial/kprintf/panic/InterruptFrame/GDT+IST
+   ↓
+Higher-half: chuyển kernel lên 0xFFFFFFFF80100000 — làm TRƯỚC VMM để khỏi viết lại mm/
+   ↓
+Virtual Memory Manager thật (mm/vmm) — map()/unmap(), direct map toàn bộ RAM,
+   ↓  W^X + NX + CR0.WP, bỏ identity map của bootloader
+   ↓  (thay cho ý tưởng cũ "map on-demand khi page fault": cách đó gây fault đệ
+   ↓   quy vì chính handler cần cấp frame để làm page table — xem architecture.md 1.2)
 Kernel Heap Allocator (mm/heap) — mở khoá operator new/delete cho MỌI subsystem sau
    ↓
-PIC remap + PIT timer (arch/x86_64) — hoãn tới đây, ngay trước khi cần cho Scheduler
+PIT timer + khung IRQ + DPC + IRQL (arch/x86_64, ke/) — PIC đã remap từ M0a
    ↓
 Process/Thread Manager + Scheduler (proc/) — cần heap để cấp PCB/TCB
    ↓
@@ -311,13 +350,19 @@ VFS + Filesystem FAT32 (fs/) — cần driver disk + heap cho inode/dentry
 Libc tối giản + Shell (libc/, userland/shell/) — bước đầu tiên có user-mode (ring 3)
 ```
 
-**Điểm ngoặt kiến trúc quan trọng nhất trong lộ trình:** khi tới bước
-Libc/Shell, đây là lần đầu tiên hệ thống chạy code ở **ring 3**. Tại thời
-điểm đó, PHẢI quay lại sửa: (a) `Registers` struct thêm `rsp`/`ss`, (b)
-`isr_common` xử lý đúng 5 trường CPU push thay vì 3, (c) TSS.RSP0 phải trỏ
-tới kernel stack hợp lệ để CPU tự nạp khi có syscall/interrupt từ ring 3.
-Đừng ngạc nhiên nếu agent tương lai cần sửa lại các file trong mục 6 — đây
-là thay đổi kiến trúc đã biết trước, không phải bug.
+**Điểm ngoặt kiến trúc quan trọng nhất trong lộ trình:** lần đầu hệ thống chạy
+code ở **ring 3**. Ba thứ phải làm đúng cùng lúc, và nên đưa bước này lên SỚM
+(ngay sau scheduler, trước filesystem) để lỗi thiết kế lộ ra khi còn ít code
+phụ thuộc vào nó:
+(a) `isr_common` thêm `swapgs` có điều kiện theo bit RPL của CS
+    (layout `InterruptFrame` **không** đổi — xem mục 5.4, đây là chỗ tài liệu
+    này từng ghi sai);
+(b) `TSS.RSP0` phải trỏ tới kernel stack của thread hiện tại, scheduler cập
+    nhật mỗi lần đổi thread (`tss_set_rsp0` đã có sẵn);
+(c) `SYSCALL`/`SYSRET`: nạp MSR `STAR`/`LSTAR`/`FMASK`, và selector user trong
+    GDT phải đúng thứ tự mà `SYSRET` yêu cầu (đã chốt ở M0a, có `static_assert`
+    canh trong `gdt.hpp`).
+Chi tiết kèm code: `docs/architecture.md` mục 5.7.
 
 ## 9. Quyết định kiến trúc đã chốt (không cần tranh luận lại trừ khi có lý do mới)
 

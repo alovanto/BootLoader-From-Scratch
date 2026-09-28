@@ -1,27 +1,31 @@
 #include "tss.hpp"
+#include "lib/string.hpp"
 
 namespace {
 
 Tss tss;
 
-// Stack RIÊNG, chỉ dành cho Double Fault handler. Không subsystem nào khác
-// được đụng vào vùng này — đó chính là lý do nó tồn tại: đảm bảo luôn có
-// một chỗ "sạch" để chạy handler, bất kể stack chính đang hỏng cỡ nào.
-constexpr uint32_t DOUBLE_FAULT_STACK_SIZE = 8192; // 8KB — dư dả cho 1 hàm handler đơn giản
-alignas(16) uint8_t double_fault_stack[DOUBLE_FAULT_STACK_SIZE];
+// Stack RIÊNG cho từng loại exception "không thể tin stack hiện tại".
+// Ba loại dưới đây có thể xảy ra ở BẤT KỲ thời điểm nào, kể cả khi RSP đang
+// trỏ vào vùng rác — nên CPU phải được ép chuyển sang một vùng sạch trước khi
+// gọi handler, nếu không chính handler sẽ gây lỗi tiếp → triple fault.
+constexpr uint32_t IST_STACK_SIZE = 8192;
 
-} // namespace
+alignas(16) uint8_t double_fault_stack[IST_STACK_SIZE];
+alignas(16) uint8_t nmi_stack[IST_STACK_SIZE];
+alignas(16) uint8_t machine_check_stack[IST_STACK_SIZE];
+
+}  // namespace
 
 void tss_install_descriptor(TssDescriptor* out_descriptor) {
     // Xoá sạch TSS trước khi điền — mọi field không dùng tới (RSP1, RSP2,
-    // IST2-7...) phải là 0, không được để rác từ bộ nhớ chưa khởi tạo.
-    uint8_t* raw = reinterpret_cast<uint8_t*>(&tss);
-    for (uint32_t i = 0; i < sizeof(Tss); i++) {
-        raw[i] = 0;
-    }
+    // IST4-7...) phải là 0, không được để rác từ bộ nhớ chưa khởi tạo.
+    memset(&tss, 0, sizeof(Tss));
 
     // Đỉnh stack = địa chỉ CAO NHẤT của vùng đệm, vì stack x86 mọc xuống.
-    tss.ist1 = reinterpret_cast<uint64_t>(double_fault_stack + DOUBLE_FAULT_STACK_SIZE);
+    tss.ist1 = reinterpret_cast<uint64_t>(double_fault_stack + IST_STACK_SIZE);
+    tss.ist2 = reinterpret_cast<uint64_t>(nmi_stack + IST_STACK_SIZE);
+    tss.ist3 = reinterpret_cast<uint64_t>(machine_check_stack + IST_STACK_SIZE);
 
     // Không dùng I/O Permission Bitmap ở bước này — trỏ offset ra ngoài
     // giới hạn TSS nghĩa là "không có bitmap nào cả".
@@ -42,4 +46,8 @@ void tss_install_descriptor(TssDescriptor* out_descriptor) {
 
 void tss_load() {
     asm volatile("ltr %0" : : "r"(static_cast<uint16_t>(TSS_SELECTOR)));
+}
+
+void tss_set_rsp0(uint64_t rsp0) {
+    tss.rsp0 = rsp0;
 }

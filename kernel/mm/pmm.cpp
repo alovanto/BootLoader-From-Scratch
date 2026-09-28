@@ -1,5 +1,7 @@
-#include "pmm.hpp"
-#include "e820.hpp"
+#include "mm/pmm.hpp"
+#include "mm/e820.hpp"
+#include "lib/kprintf.hpp"
+#include "lib/string.hpp"
 
 // Từ linker.ld — địa chỉ ngay sau toàn bộ ảnh kernel (.text/.rodata/.data/
 // .bss, bao gồm cả chính bitmap bên dưới). PMM dùng để tự khoá vùng của
@@ -7,9 +9,6 @@
 extern "C" uint8_t __kernel_end[];
 
 namespace {
-
-volatile uint16_t* const VGA = reinterpret_cast<volatile uint16_t*>(0xB8000);
-constexpr int VGA_COLS = 80;
 
 // 4GB / 4096 byte-mỗi-frame / 8 bit-mỗi-byte = 131072 byte (128KB).
 // Nằm trong .bss — được zero-hoá bởi vòng lặp trong kernel_entry.asm,
@@ -44,38 +43,12 @@ inline uint64_t align_down(uint64_t value, uint64_t align) {
     return value & ~(align - 1);
 }
 
-void vga_print(int row, const char* str, uint8_t color) {
-    int col = 0;
-    while (*str && col < VGA_COLS) {
-        VGA[row * VGA_COLS + col] = static_cast<uint16_t>(color) << 8 | static_cast<uint8_t>(*str);
-        str++;
-        col++;
-    }
-}
-
-void append(char*& p, const char* s) {
-    while (*s) {
-        *p++ = *s++;
-    }
-}
-
-void append_hex(char*& p, uint64_t value) {
-    const char* digits = "0123456789ABCDEF";
-    *p++ = '0';
-    *p++ = 'x';
-    for (int i = 15; i >= 0; i--) {
-        *p++ = digits[(value >> (i * 4)) & 0xF];
-    }
-}
-
 } // namespace
 
 void pmm_init() {
     // Bước 1: mặc định MỌI frame trong phạm vi hỗ trợ là "đã dùng" — an
     // toàn theo thiết kế, chỉ mở khoá đúng phần đã xác nhận Usable.
-    for (uint64_t i = 0; i < BITMAP_SIZE_BYTES; i++) {
-        bitmap[i] = 0xFF;
-    }
+    memset(bitmap, 0xFF, BITMAP_SIZE_BYTES);
 
     // Bước 2: mở khoá (đánh dấu trống) các frame nằm trong vùng Usable theo
     // bản đồ E820 mà boot.asm đã dò và kernel/mm/e820.cpp đọc lại.
@@ -172,13 +145,15 @@ uint64_t pmm_free_frames() {
     return free_count;
 }
 
-void pmm_dump(int row) {
-    char line[80];
-    char* p = line;
-    append(p, "PMM: tong frame usable=");
-    append_hex(p, pmm_total_usable_frames());
-    append(p, " con trong=");
-    append_hex(p, pmm_free_frames());
-    *p = '\0';
-    vga_print(row, line, 0x0B);
+void pmm_dump() {
+    const uint64_t total = pmm_total_usable_frames();
+    const uint64_t free_now = pmm_free_frames();
+    // Mỗi frame 4KB → chia 256 để ra MB (256 frame = 1MB)
+    kprintf("  quan ly toi da %lu MB RAM (bitmap %lu KB trong .bss)\n",
+            MAX_SUPPORTED_RAM / (1024 * 1024), BITMAP_SIZE_BYTES / 1024);
+    kprintf("  frame dung duoc: %lu (%lu MB), con trong: %lu (%lu MB)\n",
+            total, total / 256, free_now, free_now / 256);
+    kprintf("  da khoa: 1MB thap + vung kernel [%p, %p)\n",
+            reinterpret_cast<void*>(0x100000ULL),
+            reinterpret_cast<void*>(reinterpret_cast<uint64_t>(__kernel_end)));
 }

@@ -3,9 +3,9 @@
 
 namespace {
 
-// 3 slot 8-byte (null, code64, data64) + 2 slot 8-byte gộp thành 1 vùng
-// 16-byte cho TSS descriptor = tổng 5 slot GdtEntry.
-GdtEntry gdt[5];
+// 6 slot 8-byte (null, kernel code/data, user code32/data/code64) + 2 slot
+// gộp thành vùng 16-byte cho TSS descriptor = tổng 8 slot GdtEntry.
+GdtEntry gdt[8];
 GdtPointer gdtp;
 
 void set_entry(int index, uint32_t base, uint32_t limit, uint8_t access, uint8_t flags) {
@@ -17,7 +17,7 @@ void set_entry(int index, uint32_t base, uint32_t limit, uint8_t access, uint8_t
     gdt[index].base_high   = static_cast<uint8_t>((base >> 24) & 0xFF);
 }
 
-} // namespace
+}  // namespace
 
 // Định nghĩa trong gdt_flush.asm — lgdt rồi reload toàn bộ segment register
 // (bao gồm CS, việc CPU không cho `mov cs` trực tiếp làm được).
@@ -28,16 +28,21 @@ void gdt_init() {
     // buộc flat model), nhưng vẫn cần entry hợp lệ để CPU đọc DPL/type/L-bit.
     set_entry(0, 0, 0, 0x00, 0x00);                 // null descriptor — bắt buộc phải rỗng
 
-    // access=0x9A: Present=1, DPL=0, S=1(code/data), Execute=1, Read=1
-    // flags=0xA0 : G=1 (granularity), L=1 (Long Mode code — QUAN TRỌNG,
-    //              đây là bit báo CPU đây là code 64-bit, khác hẳn code32 cũ)
-    set_entry(1, 0, 0xFFFFF, 0x9A, 0xA0);            // kernel code64 -> KERNEL_CODE_SELECTOR (0x08)
+    // access=0x9A: Present, DPL=0, S=1 (code/data), Execute, Readable
+    // flags=0xA0 : G=1, L=1 (long mode code — bit báo CPU đây là code 64-bit)
+    set_entry(1, 0, 0xFFFFF, 0x9A, 0xA0);            // 0x08 kernel code64
 
-    // access=0x92: Present=1, DPL=0, S=1, Write=1
-    set_entry(2, 0, 0xFFFFF, 0x92, 0xC0);            // kernel data64 -> KERNEL_DATA_SELECTOR (0x10)
+    // access=0x92: Present, DPL=0, S=1, Writable
+    set_entry(2, 0, 0xFFFFF, 0x92, 0xC0);            // 0x10 kernel data
 
-    // Entry 3 và 4 gộp lại thành 1 TssDescriptor 16-byte (xem gdt.hpp)
-    TssDescriptor* tss_desc = reinterpret_cast<TssDescriptor*>(&gdt[3]);
+    // DPL=3 cho phần user. Ba entry này chưa dùng khi kernel còn chạy 100%
+    // ring 0, nhưng vị trí của chúng bị công thức SYSRET ràng buộc (xem gdt.hpp).
+    set_entry(3, 0, 0xFFFFF, 0xFA, 0xC0);            // 0x18 user code32 (giữ chỗ, D=1)
+    set_entry(4, 0, 0xFFFFF, 0xF2, 0xC0);            // 0x20 user data
+    set_entry(5, 0, 0xFFFFF, 0xFA, 0xA0);            // 0x28 user code64 (L=1)
+
+    // Entry 6 và 7 gộp lại thành 1 TssDescriptor 16-byte → selector 0x30
+    TssDescriptor* tss_desc = reinterpret_cast<TssDescriptor*>(&gdt[6]);
     tss_install_descriptor(tss_desc);
 
     gdtp.limit = sizeof(gdt) - 1;

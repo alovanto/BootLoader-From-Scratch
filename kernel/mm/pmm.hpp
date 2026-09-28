@@ -34,7 +34,7 @@ void pmm_free_frame(uint64_t phys_addr);
 uint64_t pmm_total_usable_frames();
 uint64_t pmm_free_frames();
 
-// In tổng quan bitmap (tổng frame usable, còn trống) ra VGA text buffer, để
-// xác nhận bằng mắt trên QEMU — đúng nguyên tắc "mỗi bước phải thấy kết quả
-// trên QEMU" ở CLAUDE.md, trước khi VMM (bước tiếp theo) dùng PMM làm nền.
-void pmm_dump(int row);
+// In tổng quan bitmap (tổng frame usable, còn trống) qua kprintf, để xác nhận
+// bằng mắt trên QEMU — đúng nguyên tắc "mỗi bước phải thấy kết quả trên QEMU"
+// ở CLAUDE.md, trước khi VMM (bước tiếp theo) dùng PMM làm nền.
+void pmm_dump();
